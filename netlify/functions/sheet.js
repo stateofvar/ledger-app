@@ -26,6 +26,18 @@ function monthKeyFromDate(dateStr) {
   return dateStr.slice(0, 7);
 }
 
+function parseMoney(val) {
+  if (val === undefined || val === null || val === '') return 0;
+  if (typeof val === 'number') return val;
+  // Strip thousands separators, currency symbols, and stray whitespace
+  // so values like "27,923.38" or "$1,000" parse correctly instead of
+  // silently truncating at the first non-numeric character.
+  const cleaned = String(val).replace(/[^0-9.\-]/g, '');
+  if (cleaned === '') return 0;
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
+}
+
 async function getSettingsRows(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -34,10 +46,11 @@ async function getSettingsRows(sheets) {
   return res.data.values || [];
 }
 
+// Columns: A Date | B Spent | C Deposited | D Note | E Balance
 async function getTransactionRows(sheets) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: 'Transactions!A2:D10000',
+    range: 'Transactions!A2:E10000',
   });
   return res.data.values || [];
 }
@@ -64,16 +77,6 @@ async function setSettingsStartingBalance(sheets, monthKey, startingBalance) {
   }
 }
 
-function parseMoney(val) {
-  if (val === undefined || val === null || val === '') return NaN;
-  if (typeof val === 'number') return val;
-  // Strip thousands separators, currency symbols, and stray whitespace
-  // so values like "27,923.38" or "$1,000" parse correctly instead of
-  // silently truncating at the first non-numeric character.
-  const cleaned = String(val).replace(/[^0-9.\-]/g, '');
-  return parseFloat(cleaned);
-}
-
 async function getStartingBalanceForMonth(sheets, monthKey) {
   const rows = await getSettingsRows(sheets);
   const row = rows.find((r) => r[0] === monthKey);
@@ -83,7 +86,7 @@ async function getStartingBalanceForMonth(sheets, monthKey) {
 // Recompute running balances for a whole month's transactions in the sheet,
 // and return the ending balance for that month.
 async function recomputeMonth(sheets, monthKey) {
-  const allRows = await getTransactionRows(sheets); // [date, amount, note, balance]
+  const allRows = await getTransactionRows(sheets); // [date, spent, deposited, note, balance]
   const startingBalance = await getStartingBalanceForMonth(sheets, monthKey);
   if (startingBalance === null) {
     throw new Error(`No starting balance set for month ${monthKey}`);
@@ -94,11 +97,12 @@ async function recomputeMonth(sheets, monthKey) {
   allRows.forEach((row, i) => {
     const date = row[0];
     if (!date || monthKeyFromDate(date) !== monthKey) return;
-    const amount = parseMoney(row[1] || '0');
-    running = running - amount;
+    const spent = parseMoney(row[1]);
+    const deposited = parseMoney(row[2]);
+    running = running - spent + deposited;
     const rowNumber = i + 2;
     updates.push({
-      range: `Transactions!D${rowNumber}`,
+      range: `Transactions!E${rowNumber}`,
       values: [[running]],
     });
   });
@@ -161,12 +165,15 @@ exports.handler = async (event) => {
       allRows.forEach((row, i) => {
         const date = row[0];
         if (!date || monthKeyFromDate(date) !== monthKey) return;
+        const spent = parseMoney(row[1]);
+        const deposited = parseMoney(row[2]);
         transactions.push({
           rowNumber: i + 2,
           date,
-          amount: parseMoney(row[1] || '0'),
-          note: row[2] || '',
-          balance: row[3] !== undefined ? parseFloat(row[3]) : null,
+          type: deposited > 0 ? 'deposit' : 'expense',
+          amount: deposited > 0 ? deposited : spent,
+          note: row[3] || '',
+          balance: row[4] !== undefined && row[4] !== '' ? parseMoney(row[4]) : null,
         });
       });
       const currentBalance =
@@ -189,16 +196,19 @@ exports.handler = async (event) => {
     // ---- POST add a transaction ----
     if (event.httpMethod === 'POST' && action === 'transaction') {
       const body = JSON.parse(event.body);
-      const { date, amount, note } = body;
+      const { date, amount, note, type } = body; // type: 'expense' | 'deposit'
       const monthKey = monthKeyFromDate(date);
       await ensureMonthInitialized(sheets, monthKey);
 
+      const spent = type === 'deposit' ? '' : amount;
+      const deposited = type === 'deposit' ? amount : '';
+
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID,
-        range: 'Transactions!A:D',
+        range: 'Transactions!A:E',
         valueInputOption: 'RAW',
         insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: [[date, amount, note || '', '']] },
+        requestBody: { values: [[date, spent, deposited, note || '', '']] },
       });
 
       const endingBalance = await recomputeMonth(sheets, monthKey);
@@ -212,12 +222,15 @@ exports.handler = async (event) => {
     // ---- PUT edit a transaction ----
     if (event.httpMethod === 'PUT' && action === 'transaction') {
       const body = JSON.parse(event.body);
-      const { rowNumber, date, amount, note } = body;
+      const { rowNumber, date, amount, note, type } = body;
+      const spent = type === 'deposit' ? '' : amount;
+      const deposited = type === 'deposit' ? amount : '';
+
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `Transactions!A${rowNumber}:C${rowNumber}`,
+        range: `Transactions!A${rowNumber}:D${rowNumber}`,
         valueInputOption: 'RAW',
-        requestBody: { values: [[date, amount, note || '']] },
+        requestBody: { values: [[date, spent, deposited, note || '']] },
       });
       const monthKey = monthKeyFromDate(date);
       const endingBalance = await recomputeMonth(sheets, monthKey);
@@ -237,7 +250,7 @@ exports.handler = async (event) => {
       // which keeps other rowNumbers stable).
       await sheets.spreadsheets.values.clear({
         spreadsheetId: SHEET_ID,
-        range: `Transactions!A${rowNumber}:D${rowNumber}`,
+        range: `Transactions!A${rowNumber}:E${rowNumber}`,
       });
 
       const endingBalance = await recomputeMonth(sheets, monthKey);
