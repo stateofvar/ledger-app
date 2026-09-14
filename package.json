@@ -1,0 +1,15 @@
+{
+  "name": "bookkeeping-app",
+  "version": "1.0.0",
+  "description": "Personal bookkeeping app backed by Google Sheets",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  }
+}
