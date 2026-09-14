@@ -64,10 +64,20 @@ async function setSettingsStartingBalance(sheets, monthKey, startingBalance) {
   }
 }
 
+function parseMoney(val) {
+  if (val === undefined || val === null || val === '') return NaN;
+  if (typeof val === 'number') return val;
+  // Strip thousands separators, currency symbols, and stray whitespace
+  // so values like "27,923.38" or "$1,000" parse correctly instead of
+  // silently truncating at the first non-numeric character.
+  const cleaned = String(val).replace(/[^0-9.\-]/g, '');
+  return parseFloat(cleaned);
+}
+
 async function getStartingBalanceForMonth(sheets, monthKey) {
   const rows = await getSettingsRows(sheets);
   const row = rows.find((r) => r[0] === monthKey);
-  return row ? parseFloat(row[1]) : null;
+  return row ? parseMoney(row[1]) : null;
 }
 
 // Recompute running balances for a whole month's transactions in the sheet,
@@ -84,7 +94,7 @@ async function recomputeMonth(sheets, monthKey) {
   allRows.forEach((row, i) => {
     const date = row[0];
     if (!date || monthKeyFromDate(date) !== monthKey) return;
-    const amount = parseFloat(row[1] || '0');
+    const amount = parseMoney(row[1] || '0');
     running = running - amount;
     const rowNumber = i + 2;
     updates.push({
@@ -154,7 +164,7 @@ exports.handler = async (event) => {
         transactions.push({
           rowNumber: i + 2,
           date,
-          amount: parseFloat(row[1] || '0'),
+          amount: parseMoney(row[1] || '0'),
           note: row[2] || '',
           balance: row[3] !== undefined ? parseFloat(row[3]) : null,
         });
