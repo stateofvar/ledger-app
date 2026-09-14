@@ -38,15 +38,41 @@
   header {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     margin-bottom: 6px;
+  }
+
+  .month-nav {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .month-nav button {
+    background: none;
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 4px;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .month-nav button:disabled {
+    color: var(--rule);
+    border-color: var(--rule);
   }
 
   .month-label {
     font-family: 'Source Serif 4', serif;
-    font-size: 15px;
-    color: var(--muted);
+    font-size: 16px;
     letter-spacing: 0.02em;
+    min-width: 130px;
+    text-align: center;
   }
 
   .balance-section {
@@ -133,7 +159,32 @@
     font-size: 13px;
   }
 
-  .tx-list-caption {
+  .type-toggle {
+    display: flex;
+    gap: 8px;
+  }
+
+  .type-toggle button {
+    flex: 1;
+    background: #fff;
+    border: 1px solid var(--rule);
+    color: var(--muted);
+    font-weight: 500;
+    padding: 10px;
+    font-size: 14px;
+  }
+
+  .type-toggle button.active.expense {
+    background: var(--red);
+    border-color: var(--red);
+    color: #fff;
+  }
+
+  .type-toggle button.active.deposit {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
     font-size: 13px;
     color: var(--muted);
     margin-bottom: 10px;
@@ -179,6 +230,10 @@
     font-family: 'Source Serif 4', serif;
     font-size: 17px;
     color: var(--red);
+  }
+
+  .tx-amount.deposit {
+    color: var(--green);
   }
 
   .tx-balance {
@@ -260,7 +315,11 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="month-label" id="monthLabel">—</div>
+    <div class="month-nav">
+      <button id="prevMonthBtn" aria-label="Previous month">&larr;</button>
+      <div class="month-label" id="monthLabel">—</div>
+      <button id="nextMonthBtn" aria-label="Next month">&rarr;</button>
+    </div>
     <button class="secondary" id="refreshBtn">Refresh</button>
   </header>
 
@@ -271,9 +330,13 @@
   </div>
 
   <form class="entry" id="entryForm">
+    <div class="type-toggle">
+      <button type="button" class="active expense" id="typeExpenseBtn" data-type="expense">Expense</button>
+      <button type="button" class="deposit" id="typeDepositBtn" data-type="deposit">Deposit</button>
+    </div>
     <div class="entry-row">
       <input type="date" id="txDate" required />
-      <input type="number" id="txAmount" placeholder="Amount spent" step="0.01" min="0" required />
+      <input type="number" id="txAmount" placeholder="Amount" step="0.01" min="0" required />
     </div>
     <input type="text" id="txNote" placeholder="What was it for?" required />
     <button type="submit" id="submitBtn">Add expense</button>
@@ -287,7 +350,11 @@
 
 <div class="edit-overlay hidden" id="editOverlay">
   <div class="edit-sheet">
-    <h3>Edit expense</h3>
+    <h3>Edit transaction</h3>
+    <div class="type-toggle">
+      <button type="button" class="expense" id="editTypeExpenseBtn" data-type="expense">Expense</button>
+      <button type="button" class="deposit" id="editTypeDepositBtn" data-type="deposit">Deposit</button>
+    </div>
     <input type="date" id="editDate" />
     <input type="number" id="editAmount" step="0.01" min="0" />
     <input type="text" id="editNote" />
@@ -308,6 +375,14 @@ function todayStr() {
 
 function currentMonthKey() {
   return todayStr().slice(0,7);
+}
+
+function shiftMonthKey(monthKey, delta) {
+  const [y, m] = monthKey.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${yy}-${mm}`;
 }
 
 function formatMoney(n) {
@@ -332,6 +407,8 @@ const els = {
   balanceFigure: document.getElementById('balanceFigure'),
   startingLine: document.getElementById('startingLine'),
   entryForm: document.getElementById('entryForm'),
+  typeExpenseBtn: document.getElementById('typeExpenseBtn'),
+  typeDepositBtn: document.getElementById('typeDepositBtn'),
   txDate: document.getElementById('txDate'),
   txAmount: document.getElementById('txAmount'),
   txNote: document.getElementById('txNote'),
@@ -339,16 +416,45 @@ const els = {
   txList: document.getElementById('txList'),
   status: document.getElementById('status'),
   refreshBtn: document.getElementById('refreshBtn'),
+  prevMonthBtn: document.getElementById('prevMonthBtn'),
+  nextMonthBtn: document.getElementById('nextMonthBtn'),
   editOverlay: document.getElementById('editOverlay'),
   editDate: document.getElementById('editDate'),
   editAmount: document.getElementById('editAmount'),
   editNote: document.getElementById('editNote'),
   editCancel: document.getElementById('editCancel'),
   editSave: document.getElementById('editSave'),
+  editTypeExpenseBtn: document.getElementById('editTypeExpenseBtn'),
+  editTypeDepositBtn: document.getElementById('editTypeDepositBtn'),
 };
 
 let currentData = null;
 let editingRow = null;
+let entryType = 'expense';
+let editType = 'expense';
+// Start the app viewing the current real month by default.
+// Use the back arrow to navigate to earlier months like August 2026.
+let viewedMonth = currentMonthKey();
+
+function setEntryType(type) {
+  entryType = type;
+  els.typeExpenseBtn.classList.toggle('active', type === 'expense');
+  els.typeDepositBtn.classList.toggle('active', type === 'deposit');
+  els.submitBtn.textContent = type === 'deposit' ? 'Add deposit' : 'Add expense';
+  els.txAmount.placeholder = type === 'deposit' ? 'Amount deposited' : 'Amount spent';
+}
+
+els.typeExpenseBtn.addEventListener('click', () => setEntryType('expense'));
+els.typeDepositBtn.addEventListener('click', () => setEntryType('deposit'));
+
+function setEditType(type) {
+  editType = type;
+  els.editTypeExpenseBtn.classList.toggle('active', type === 'expense');
+  els.editTypeDepositBtn.classList.toggle('active', type === 'deposit');
+}
+
+els.editTypeExpenseBtn.addEventListener('click', () => setEditType('expense'));
+els.editTypeDepositBtn.addEventListener('click', () => setEditType('deposit'));
 
 function setStatus(msg, isError) {
   els.status.textContent = msg || '';
@@ -378,21 +484,26 @@ function render() {
   els.balanceFigure.className = 'balance-figure' + (bal < 0 ? ' negative' : '');
   els.startingLine.textContent = d.startingBalance != null
     ? `Started the month at ${formatMoney(d.startingBalance)}`
-    : '';
+    : 'No starting balance set for this month yet.';
+
+  els.nextMonthBtn.disabled = viewedMonth >= currentMonthKey();
 
   if (!d.transactions || d.transactions.length === 0) {
     els.txList.innerHTML = '<div class="empty-state">No expenses logged yet this month.</div>';
     return;
   }
 
-  const rowsHtml = d.transactions.slice().reverse().map(tx => `
+  const rowsHtml = d.transactions.slice().reverse().map(tx => {
+    const isDeposit = tx.type === 'deposit';
+    const sign = isDeposit ? '+' : '-';
+    return `
     <div class="tx-row" data-row="${tx.rowNumber}">
       <div class="tx-main">
         <div class="tx-note">${escapeHtml(tx.note)}</div>
         <div class="tx-date">${formatDate(tx.date)}</div>
       </div>
       <div class="tx-right">
-        <div class="tx-amount">-${formatMoney(tx.amount).replace('-','').replace('$','$')}</div>
+        <div class="tx-amount${isDeposit ? ' deposit' : ''}">${sign}${formatMoney(Math.abs(tx.amount)).replace('-','')}</div>
         <div class="tx-balance">bal ${formatMoney(tx.balance)}</div>
         <div class="tx-actions">
           <button class="edit-btn" data-row="${tx.rowNumber}">Edit</button>
@@ -400,7 +511,8 @@ function render() {
         </div>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
   els.txList.innerHTML = rowsHtml;
 
   els.txList.querySelectorAll('.edit-btn').forEach(btn => {
@@ -428,6 +540,7 @@ function openEdit(rowNumber) {
   els.editDate.value = tx.date;
   els.editAmount.value = tx.amount;
   els.editNote.value = tx.note;
+  setEditType(tx.type || 'expense');
   els.editOverlay.classList.remove('hidden');
 }
 
@@ -447,13 +560,13 @@ els.editSave.addEventListener('click', async () => {
     const res = await fetch(`${FN_URL}?action=transaction`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rowNumber: editingRow, date, amount, note }),
+      body: JSON.stringify({ rowNumber: editingRow, date, amount, note, type: editType }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to save');
     els.editOverlay.classList.add('hidden');
     editingRow = null;
-    await loadMonth(currentMonthKey());
+    await loadMonth(viewedMonth);
   } catch (err) {
     setStatus(err.message, true);
   } finally {
@@ -465,12 +578,12 @@ async function deleteTx(rowNumber) {
   if (!confirm('Delete this expense?')) return;
   setStatus('Deleting…');
   try {
-    const res = await fetch(`${FN_URL}?action=transaction&rowNumber=${rowNumber}&month=${currentMonthKey()}`, {
+    const res = await fetch(`${FN_URL}?action=transaction&rowNumber=${rowNumber}&month=${viewedMonth}`, {
       method: 'DELETE',
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to delete');
-    await loadMonth(currentMonthKey());
+    await loadMonth(viewedMonth);
   } catch (err) {
     setStatus(err.message, true);
   }
@@ -492,13 +605,14 @@ els.entryForm.addEventListener('submit', async (e) => {
     const res = await fetch(`${FN_URL}?action=transaction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, amount, note }),
+      body: JSON.stringify({ date, amount, note, type: entryType }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to add');
     els.txAmount.value = '';
     els.txNote.value = '';
-    await loadMonth(currentMonthKey());
+    setEntryType('expense');
+    await loadMonth(viewedMonth);
   } catch (err) {
     setStatus(err.message, true);
   } finally {
@@ -507,11 +621,32 @@ els.entryForm.addEventListener('submit', async (e) => {
   }
 });
 
-els.refreshBtn.addEventListener('click', () => loadMonth(currentMonthKey()));
+els.refreshBtn.addEventListener('click', () => loadMonth(viewedMonth));
+
+els.prevMonthBtn.addEventListener('click', () => {
+  viewedMonth = shiftMonthKey(viewedMonth, -1);
+  updateDateFieldDefault();
+  loadMonth(viewedMonth);
+});
+
+els.nextMonthBtn.addEventListener('click', () => {
+  if (viewedMonth >= currentMonthKey()) return;
+  viewedMonth = shiftMonthKey(viewedMonth, 1);
+  updateDateFieldDefault();
+  loadMonth(viewedMonth);
+});
+
+function updateDateFieldDefault() {
+  if (viewedMonth === currentMonthKey()) {
+    els.txDate.value = todayStr();
+  } else {
+    els.txDate.value = `${viewedMonth}-01`;
+  }
+}
 
 // init
-els.txDate.value = todayStr();
-loadMonth(currentMonthKey());
+updateDateFieldDefault();
+loadMonth(viewedMonth);
 </script>
 </body>
 </html>
